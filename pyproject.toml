@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "did-julia"
+version = "0.1.0"
+description = "Reference resolver for the did:julia DID method"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Ken Griggs", email = "ken@julia.social" }]
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.25",
+    "chia_rs>=0.6",
+]
+
+[project.urls]
+Homepage = "https://github.com/julia-social/did-julia"
+Specification = "https://github.com/julia-social/did-julia/blob/main/spec/did-julia.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
