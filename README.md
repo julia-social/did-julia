@@ -8,6 +8,7 @@ A `did:julia` identifier is the base58 encoding of a Chia singleton launcher ID 
 
 - **[spec/did-julia.md](spec/did-julia.md)** — the method specification: identifier syntax, on-chain data model, CRUD operations, DID Document construction, the Verifiable Credentials 2.0 mapping, and security and privacy considerations.
 - **[src/did_julia/](src/did_julia/)** — the Python reference resolver.
+- **[ts/](ts/)** — the TypeScript resolver for the DIF `did-resolver` interface, for edge runtimes.
 - **[registration/](registration/)** — the W3C DID method registry entry.
 
 ## The reference resolver
@@ -26,6 +27,23 @@ print(result["didDocument"])
 Resolution reads public Chia blockchain state — by default through the open [Coinset](https://coinset.org) mainnet RPC, or your own full node via `FullNodeClient(base_url=..., cert=...)`. The resolver does not trust its data source: it recomputes the singleton's full puzzle hash from the parsed state and checks it against the on-chain coin (`did:julia:stateVerified` in the resolution metadata). Tests run offline against committed mainnet fixtures: `python -m pytest`.
 
 Dependencies are `requests` and `chia_rs` (the consensus VM binding, used only to execute the most recent spend for its state-carrying `REMARK` condition); base58, CLVM (de)serialization, tree hashing, and curried-puzzle-hash math are implemented in readable pure Python.
+
+## The TypeScript resolver
+
+[`ts/`](ts/) holds `@julia-social/did-julia-resolver`, a port of the reference resolver to the DIF [`did-resolver`](https://github.com/decentralized-identity/did-resolver) interface that runs in edge runtimes such as Cloudflare Workers.
+
+```ts
+import { Resolver } from "did-resolver";
+import { getResolver } from "@julia-social/did-julia-resolver";
+
+const result = await new Resolver(getResolver()).resolve(
+  "did:julia:ArD2JyqfkVVbT9Liegqu4jcfBEXtHnPofmF2rsBuq1TX",
+);
+```
+
+It reaches the same verified state by a different route: rather than executing the most recent spend to read its `REMARK`, it **derives** the next generation's state from the spend's own solution and proves the derivation by recomputing the singleton puzzle hash. A derivation that matches the chain's commitment is the state; one that does not is never served. That removes the CLVM engine from the dependency graph entirely — SHA-256 is the only primitive it needs — without weakening verification ([ADR 0001](ts/docs/adr/0001-state-derivation-without-clvm.md)).
+
+Both implementations replay the same language-neutral fixtures in [`tests/fixtures/`](tests/fixtures), and the TypeScript suite asserts its resolution results are **byte-equivalent** to the Python resolver's recorded output. Its state transitions are pinned by ground-truth vectors captured from executing the real compiled Chialisp puzzles.
 
 Known v1 limitation, stated in the spec (§8.2): verification-method enumeration proves key membership for single-key configurations (the personal-DID common case). Multi-key Merkle-path replay from historical spends is future work; the authentication commitment is always published.
 
