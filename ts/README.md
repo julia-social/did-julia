@@ -45,8 +45,11 @@ const result = await resolver.resolve(
   protocol's uniform inert-tree sentinels — which are *derived* from the
   all-zero leaf, never hardcoded.
 
-Not implemented, and reported rather than faked: `versionId` / `versionTime`
-resolution, representations other than `application/did+ld+json`, DID URL
+Not implemented, and **refused rather than faked**: version-specific resolution.
+A request carrying `versionId` or `versionTime` returns
+`unsupportedResolutionOption` instead of the current document — answering a
+question the caller did not ask is the one failure they cannot detect. Also not
+implemented: representations other than `application/did+ld+json`, DID URL
 dereferencing, and multi-key Merkle-path replay for verification-method
 enumeration (a v1 limitation shared with the Python reference — a multi-class
 DID publishes its authentication commitment and no verification methods). See
@@ -69,6 +72,17 @@ which case resolution errors — but it cannot forge:
   hashed against the prelauncher coin's puzzle hash;
 - a key is published as a verification method only when its membership in the
   *current* authentication Merkle root is provable (spec §8.2).
+
+**An outage is never an answer.** `notFound` is returned only when the node
+itself reports the coin absent — a stock full node's `{ success: true,
+coin_record: null }`, or a gateway's explicit not-found code. A transport
+failure, timeout, non-2xx status, oversized body, or non-JSON body raises
+`internalError`, which callers such as ThisDID treat as transport-class. The
+distinction matters because `notFound` is a semantic verdict that downstream
+resolvers may cache: an unreachable node must never become an authoritative
+claim that a DID does not exist. Response bodies are bounded *while streaming*
+(and rejected up front on an oversized `content-length`), so a hostile endpoint
+cannot exhaust an edge runtime before the limit is consulted.
 
 **Fail-closed:** a spend for which no known state transition reproduces the
 chain's commitment returns `didResolutionMetadata.error = "unverifiableState"`.

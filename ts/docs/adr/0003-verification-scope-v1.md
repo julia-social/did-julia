@@ -50,17 +50,47 @@ resolve byte-equivalently to the reference resolver's live output.
 
 ## Not implemented (and reported honestly)
 
-- **Version-specific resolution.** `versionId` and `versionTime` resolution
-  options are not consulted, matching both the reference resolver and every
-  sibling driver in ThisDID. The resolver always answers with current state.
+- **Version-specific resolution.** `versionId` and `versionTime` are **refused**
+  with `unsupportedResolutionOption`, not ignored.
+
+  Ignoring them is the sibling-driver convention in ThisDID and matches the
+  reference resolver, and it was this package's original behaviour. Review of
+  PR #1 was right to reject it: a caller who asks for version X and receives
+  the current document, correctly formed and stamped `stateVerified: true`, has
+  no way to detect that it answered a different question. Every other limitation
+  here is visible in the result; that one was not. A refusal is honest, and a
+  caller who does not pass the options is unaffected.
+
+  The code is method-specific — the vendored DIF `did-resolver` core registers
+  no error for an unsupported resolution option — and follows the precedent of
+  ThisDID's other method-specific fail-closed codes (e.g. hedera's
+  `resourceLimitExceeded`). It is neither transport-class nor
+  unsupported-method-class there, so it reaches the caller as a resolution
+  verdict rather than triggering a fallback chain.
 - **Representations other than `application/did+ld+json`.**
 - **DID URL dereferencing** — path, query, and fragment dereferencing beyond
   the document itself.
 
+## Withholding is not absence
+
+"It can withhold, and the resolver then errors" is a claim the code has to earn.
+`notFound` is a semantic verdict that downstream resolvers may cache, so it is
+returned only when the node *itself* reports the coin absent — either a stock
+full node's `{ success: true, coin_record: null }` or a gateway's explicit
+not-found code (Coinset answers `success: false` with
+`structuredError.code = "COIN_RECORD_NOT_FOUND"`, so both shapes are
+recognized, and anything unrecognized is treated as a real error). Every other
+failure — network, timeout, non-2xx, oversized, non-JSON — raises
+`internalError`, which is transport-class to ThisDID.
+
+Erring toward `internalError` is the safe direction: a transport-class error
+makes a caller retry or fall through, while a wrong `notFound` is a durable,
+cacheable lie about someone's identity.
+
 ## Trust model, stated plainly
 
 The full node is a **data source, not an authority**. It can withhold (the
-resolver then errors) but it cannot forge: state is bound to the coin's puzzle
+resolver then errors, as above) but it cannot forge: state is bound to the coin's puzzle
 hash, the coin is reached by singleton lineage from the launcher ID that the
 DID itself encodes, and the genesis key is bound to the prelauncher coin's
 puzzle hash. Choosing a different endpoint — or Coinset's one-call
