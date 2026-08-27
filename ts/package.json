@@ -1,0 +1,49 @@
+{
+  "name": "@julia-social/did-julia-resolver",
+  "version": "1.0.0",
+  "description": "did:julia resolver for the DIF did-resolver interface — Chia singleton state read from any full node and verified by singleton puzzle-hash recomputation, with no CLVM execution.",
+  "type": "module",
+  "private": true,
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/julia-social/did-julia",
+    "directory": "ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf lib",
+    "test": "vitest run",
+    "fixtures:sync": "node scripts/sync-fixtures.mjs",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\""
+  },
+  "devDependencies": {
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  },
+  "peerDependencies": {
+    "did-resolver": ">=4.1.0"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.8.0",
+    "did-resolver": "^4.1.0"
+  }
+}
