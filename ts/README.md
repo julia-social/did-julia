@@ -49,10 +49,14 @@ Not implemented, and **refused rather than faked**: version-specific resolution
 and every representation but one. A request carrying `versionId` or
 `versionTime` returns `unsupportedResolutionOption`, and an `accept` this
 resolver cannot produce returns the standard `representationNotSupported`
-rather than `application/did+ld+json` under another name — including an
-`accept` that names the JSON-LD type with `q=0`, which per RFC 9110 §12.5.1
-means "not acceptable" (the most specific matching entry decides, so
-`application/did+ld+json, */*;q=0` is still served) — answering a question
+rather than `application/did+ld+json` under another name . Per RFC 9110 §12.5.1 that includes an
+`accept` naming the JSON-LD type with `q=0` ("not acceptable", not a weak
+preference) and one naming a media parameter the representation does not carry,
+such as a JSON-LD `profile` this resolver does not emit — media parameters
+preceding `q` are part of the media range, while parameters after it are accept
+extensions and are ignored. The most specific matching range decides, so
+`application/did+ld+json, */*;q=0` is still served, and a UTF-8 `charset` is
+satisfied because the representation is UTF-8 by construction — answering a question
 the caller did not ask is the one failure they cannot detect. Also not
 implemented: DID URL dereferencing, and multi-key Merkle-path replay for verification-method
 enumeration (a v1 limitation shared with the Python reference — a multi-class
