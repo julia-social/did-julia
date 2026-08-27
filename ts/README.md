@@ -45,44 +45,69 @@ const result = await resolver.resolve(
   protocol's uniform inert-tree sentinels — which are *derived* from the
   all-zero leaf, never hardcoded.
 
-Not implemented, and **refused rather than faked**: version-specific resolution.
-A request carrying `versionId` or `versionTime` returns
-`unsupportedResolutionOption` instead of the current document — answering a
-question the caller did not ask is the one failure they cannot detect. Also not
-implemented: representations other than `application/did+ld+json`, DID URL
-dereferencing, and multi-key Merkle-path replay for verification-method
+Not implemented, and **refused rather than faked**: version-specific resolution
+and every representation but one. A request carrying `versionId` or
+`versionTime` returns `unsupportedResolutionOption`, and an `accept` this
+resolver cannot produce returns the standard `representationNotSupported`
+rather than `application/did+ld+json` under another name — answering a question
+the caller did not ask is the one failure they cannot detect. Also not
+implemented: DID URL dereferencing, and multi-key Merkle-path replay for verification-method
 enumeration (a v1 limitation shared with the Python reference — a multi-class
 DID publishes its authentication commitment and no verification methods). See
 [ADR 0003](docs/adr/0003-verification-scope-v1.md).
 
 ## Trust model and fail-closed behavior
 
-**The full node is a data source, not an authority.** It can withhold — in
-which case resolution errors — but it cannot forge:
+**What the DID itself proves.** A Chia coin id is the hash of the coin's own
+fields, and a did:julia identifier *is* a singleton launcher coin id — so the
+back of the lineage is checkable rather than trusted:
 
-- the DID's method-specific identifier *is* the singleton launcher ID, so the
-  lineage the resolver walks is fixed by the identifier itself;
-- the state served is only ever a state whose recomputed
-  `singleton_top_layer_v1_1` puzzle hash equals the unspent coin's on-chain
-  puzzle hash, so a lying or buggy endpoint cannot substitute a different
-  authentication configuration, recovery configuration, or document pointer;
-- the spend's puzzle reveal must hash to its own coin's puzzle hash before its
-  solution is read;
-- the genesis public key is only used after the prelauncher puzzle reveal is
-  hashed against the prelauncher coin's puzzle hash;
-- a key is published as a verification method only when its membership in the
-  *current* authentication Merkle root is provable (spec §8.2).
+- every RPC record is checked against the identifier it was requested by: a
+  coin record must hash back to the requested coin id, children must carry the
+  requested parent, and a spend must be a spend of the coin asked for;
+- the launcher coin is therefore pinned by the DID string, and with it the
+  prelauncher coin id, the prelauncher puzzle hash, and — because that puzzle
+  hash commits to `sha256tree(genesis key)` — **the DID's genesis public key**;
+- every spend must carry a `parent-info` that re-derives the DID's launcher ID,
+  the same check `julia_did` performs on chain before consensus will honour a
+  spend at all;
+- the revealed pre-spend state must match the `CURRIED-ARGS-HASH` that the
+  spend's own authenticated puzzle commits to;
+- the state served must recompute to the puzzle hash of the coin reported as
+  unspent, so an endpoint that answers *inconsistently* is caught;
+- a key becomes a verification method only when its membership in the
+  **current** authentication Merkle root is provable (spec §8.2).
+
+**What it does not prove — the trust boundary.** Nothing in a bare Chia RPC
+response proves that a coin was ever created on chain. The endpoint is
+therefore **trusted for the DID's CURRENT state**. An endpoint that fabricates
+a *coherent* lineage forward from the real launcher — real launcher coin, real
+prelauncher, a genuine `parent-info`, a real singleton puzzle wrapped around a
+state of its choosing — is not detected by this resolver. Detecting that needs
+block-level verification (headers and inclusion proofs, i.e. a light client),
+which this driver does not do and does not claim to.
+
+So: the checks above eliminate the incoherent forgeries and every buggy-proxy
+and wrong-record case, and they bind the identifier, the lineage anchor, and
+the genesis key cryptographically. They do not make a hostile endpoint
+harmless. **Point the resolver at a node you trust** — `baseUrl` takes any Chia
+full node RPC; the open Coinset endpoint is a zero-configuration default, not a
+security assumption.
 
 **An outage is never an answer.** `notFound` is returned only when the node
 itself reports the coin absent — a stock full node's `{ success: true,
-coin_record: null }`, or a gateway's explicit not-found code. A transport
-failure, timeout, non-2xx status, oversized body, or non-JSON body raises
-`internalError`, which callers such as ThisDID treat as transport-class. The
-distinction matters because `notFound` is a semantic verdict that downstream
-resolvers may cache: an unreachable node must never become an authoritative
-claim that a DID does not exist. Response bodies are bounded *while streaming*
-(and rejected up front on an oversized `content-length`), so a hostile endpoint
-cannot exhaust an edge runtime before the limit is consulted.
+coin_record: null }`, or a gateway's own not-found code, recognized from a
+known structured code or a message anchored to the coin record (never a
+free-text search for "not found", which would read a proxy's "upstream service
+not found" as an authoritative absence). Every other failure — transport,
+timeout, non-2xx, oversized, non-JSON, or a record that fails the linkage
+checks above — raises `internalError`, which callers such as ThisDID treat as
+transport-class. The distinction matters because `notFound` is a semantic
+verdict that downstream resolvers may cache: an unreachable node must never
+become an authoritative claim that a DID does not exist. Response bodies are
+bounded *while streaming* (and rejected up front on an oversized
+`content-length`), so a hostile endpoint cannot exhaust an edge runtime before
+the limit is consulted.
 
 **Fail-closed:** a spend for which no known state transition reproduces the
 chain's commitment returns `didResolutionMetadata.error = "unverifiableState"`.

@@ -87,12 +87,50 @@ Erring toward `internalError` is the safe direction: a transport-class error
 makes a caller retry or fall through, while a wrong `notFound` is a durable,
 cacheable lie about someone's identity.
 
-## Trust model, stated plainly
+## Trust model, corrected
 
-The full node is a **data source, not an authority**. It can withhold (the
-resolver then errors, as above) but it cannot forge: state is bound to the coin's puzzle
-hash, the coin is reached by singleton lineage from the launcher ID that the
-DID itself encodes, and the genesis key is bound to the prelauncher coin's
-puzzle hash. Choosing a different endpoint — or Coinset's one-call
-`get_singleton_info` fast path over the portable per-generation traversal —
-changes performance and availability, never what can be proven.
+**Corrected 2026-08-27 after re-review of PR #1.** This ADR previously said the
+full node "cannot forge". That was false, and it was the most load-bearing
+sentence in the package's documentation. A working forgery was demonstrated: a
+hostile endpoint served a self-consistent fabricated lineage for a real DID and
+the resolver published an attacker-chosen key with `stateVerified: true`.
+
+The response is in two parts, and the second matters more than the first.
+
+**Checks added.** Every RPC record is now verified against the identifier it
+was requested by — a coin record must hash back to the requested coin id,
+children must carry the requested parent, a spend must be a spend of the coin
+asked for. Every spend must carry a `parent-info` that re-derives the DID's
+launcher ID (the same check `julia_did` makes on chain before consensus will
+honour a spend), and the revealed pre-spend state must match the
+`CURRIED-ARGS-HASH` its own authenticated puzzle commits to. Because a launcher
+coin id is the hash of its own fields, this pins the launcher coin, the
+prelauncher coin, and — through the prelauncher puzzle hash — `sha256tree` of
+the genesis key. **The DID string commits to its genesis public key**, so that
+key is no longer forgeable by any endpoint.
+
+**The boundary, stated instead of papered over.** Nothing in a bare Chia RPC
+response proves that a coin was ever created on chain. An endpoint that
+fabricates a *coherent* lineage forward from the real launcher — real launcher
+coin, real prelauncher, a genuine `parent-info`, a real singleton puzzle
+wrapped around a state of its choosing — is still not detected. Detecting it
+requires block-level verification: headers and inclusion proofs, i.e. a light
+client. That is a different project, and pretending otherwise is exactly the
+overclaim this rewrite exists to remove.
+
+The endpoint is therefore **trusted for the DID's current state**. Operators
+should point the resolver at a node they trust, which `baseUrl` exists to
+allow; the open Coinset default is a zero-configuration convenience, not a
+security assumption. Choosing the `get_singleton_info` fast path over the
+portable traversal changes performance, not what can be proven either way.
+
+`src/__tests__/integrity.test.ts` asserts this boundary against the README's own
+text, so the claim and the code cannot silently drift apart again.
+
+## Why the puzzle-hash check still earns its place
+
+It is not authentication, and it is no longer described as such — but it is
+what makes state *derivation* safe (ADR 0001). Within a given endpoint's
+answers, a state that recomputes to the reported coin is the state that coin
+commits to, so the resolver never has to guess which transition ran. An
+inconsistent endpoint is caught; a coherent liar is not.

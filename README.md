@@ -41,7 +41,9 @@ const result = await new Resolver(getResolver()).resolve(
 );
 ```
 
-It reaches the same verified state by a different route: rather than executing the most recent spend to read its `REMARK`, it **derives** the next generation's state from the spend's own solution and proves the derivation by recomputing the singleton puzzle hash. A derivation that matches the chain's commitment is the state; one that does not is never served. That removes the CLVM engine from the dependency graph entirely — SHA-256 is the only primitive it needs — without weakening verification ([ADR 0001](ts/docs/adr/0001-state-derivation-without-clvm.md)).
+It reaches the same state by a different route: rather than executing the most recent spend to read its `REMARK`, it **derives** the next generation's state from the spend's own solution and checks the derivation by recomputing the singleton puzzle hash. Because a coin's puzzle hash commits to its state, a derivation that matches is the state that coin holds; one that does not is never served. That removes the CLVM engine from the dependency graph entirely — SHA-256 is the only primitive it needs ([ADR 0001](ts/docs/adr/0001-state-derivation-without-clvm.md)).
+
+The TypeScript resolver additionally binds what the identifier itself commits to: every RPC record is checked against the identifier it was requested by, and each spend must carry a `parent-info` that re-derives the DID's launcher ID — which pins the launcher coin, the prelauncher, and the DID's genesis public key. It does **not** perform block-level verification, so the endpoint remains trusted for the DID's current state; the boundary is stated exactly in [ADR 0003](ts/docs/adr/0003-verification-scope-v1.md) and in [ts/README.md](ts/README.md).
 
 Both implementations replay the same language-neutral fixtures in [`tests/fixtures/`](tests/fixtures), and the TypeScript suite asserts its resolution results are **byte-equivalent** to the Python resolver's recorded output. Its state transitions are pinned by ground-truth vectors captured from executing the real compiled Chialisp puzzles.
 
