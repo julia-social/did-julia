@@ -49,7 +49,10 @@ Not implemented, and **refused rather than faked**: version-specific resolution
 and every representation but one. A request carrying `versionId` or
 `versionTime` returns `unsupportedResolutionOption`, and an `accept` this
 resolver cannot produce returns the standard `representationNotSupported`
-rather than `application/did+ld+json` under another name — answering a question
+rather than `application/did+ld+json` under another name — including an
+`accept` that names the JSON-LD type with `q=0`, which per RFC 9110 §12.5.1
+means "not acceptable" (the most specific matching entry decides, so
+`application/did+ld+json, */*;q=0` is still served) — answering a question
 the caller did not ask is the one failure they cannot detect. Also not
 implemented: DID URL dereferencing, and multi-key Merkle-path replay for verification-method
 enumeration (a v1 limitation shared with the Python reference — a multi-class

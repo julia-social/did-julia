@@ -139,8 +139,10 @@ describe("a spend must belong to the DID that is being resolved", () => {
 describe("the trust boundary is documented, not defended", () => {
   it("states the endpoint is trusted for current state", () => {
     const readme = loadReadme();
-    expect(readme).toMatch(/trusted for the DID's CURRENT state/i);
-    expect(readme).not.toMatch(/cannot forge/i);
+    // Line wrapping must not weaken the assertion.
+    const prose = readme.replace(/\s+/g, " ");
+    expect(prose).toMatch(/trusted for the DID's current state/i);
+    expect(prose).not.toMatch(/cannot forge|never forge|withhold but/i);
   });
 });
 
