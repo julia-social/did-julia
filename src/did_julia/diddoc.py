@@ -133,6 +133,14 @@ def build_document(
     return doc
 
 
+def _timestamp(unix_seconds: int) -> str:
+    """XML datetime in UTC, without sub-second precision (DID Resolution)."""
+    return (
+        datetime.fromtimestamp(unix_seconds, tz=timezone.utc)
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+
+
 def resolution_result(
     state: JuliaDidState,
     document: dict,
@@ -140,17 +148,30 @@ def resolution_result(
     confirmed_timestamp: int,
     verified: bool,
     current_puzzle: bool,
+    created_timestamp: Optional[int] = None,
+    next_version_coin_id: Optional[bytes] = None,
+    next_timestamp: Optional[int] = None,
 ) -> dict:
     """The DID resolution result: document, document metadata (§8.5), and
-    resolution metadata."""
+    resolution metadata.
+
+    ``created_timestamp``, ``next_version_coin_id`` and ``next_timestamp`` are
+    supplied only by version-specific resolution, which walks the DID's whole
+    lineage and therefore knows them. Current-state resolution reports what a
+    single look at the unspent coin establishes, so that its metadata does not
+    depend on which traversal route a node happened to support (§8.5).
+    """
     doc_meta: dict = {
         "versionId": "0x" + version_coin_id.hex(),
     }
+    if created_timestamp:
+        doc_meta["created"] = _timestamp(created_timestamp)
     if confirmed_timestamp:
-        doc_meta["updated"] = (
-            datetime.fromtimestamp(confirmed_timestamp, tz=timezone.utc)
-            .strftime("%Y-%m-%dT%H:%M:%SZ")
-        )
+        doc_meta["updated"] = _timestamp(confirmed_timestamp)
+    if next_version_coin_id is not None:
+        doc_meta["nextVersionId"] = "0x" + next_version_coin_id.hex()
+    if next_timestamp:
+        doc_meta["nextUpdate"] = _timestamp(next_timestamp)
     if state.deactivated:
         doc_meta["deactivated"] = True
     return {
@@ -165,8 +186,12 @@ def resolution_result(
 
 
 def not_found(message: str) -> dict:
+    return error_result("notFound", message)
+
+
+def error_result(error: str, message: str) -> dict:
     return {
         "didDocument": None,
         "didDocumentMetadata": {},
-        "didResolutionMetadata": {"error": "notFound", "errorMessage": message},
+        "didResolutionMetadata": {"error": error, "errorMessage": message},
     }

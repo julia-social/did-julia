@@ -50,23 +50,13 @@ resolve byte-equivalently to the reference resolver's live output.
 
 ## Not implemented (and reported honestly)
 
-- **Version-specific resolution.** `versionId` and `versionTime` are **refused**
-  with `unsupportedResolutionOption`, not ignored.
-
-  Ignoring them is the sibling-driver convention in ThisDID and matches the
-  reference resolver, and it was this package's original behaviour. Review of
-  PR #1 was right to reject it: a caller who asks for version X and receives
-  the current document, correctly formed and stamped `stateVerified: true`, has
-  no way to detect that it answered a different question. Every other limitation
-  here is visible in the result; that one was not. A refusal is honest, and a
-  caller who does not pass the options is unaffected.
-
-  The code is method-specific — the vendored DIF `did-resolver` core registers
-  no error for an unsupported resolution option — and follows the precedent of
-  ThisDID's other method-specific fail-closed codes (e.g. hedera's
-  `resourceLimitExceeded`). It is neither transport-class nor
-  unsupported-method-class there, so it reaches the caller as a resolution
-  verdict rather than triggering a fallback chain.
+- ~~**Version-specific resolution.** `versionId` and `versionTime` are
+  **refused** with `unsupportedResolutionOption`, not ignored.~~
+  **Superseded by [ADR 0004](0004-version-specific-resolution.md) (2026-09-01):
+  both options are now implemented.** The reasoning that produced the refusal
+  still stands and is why the implementation looks the way it does — a version
+  request is answered under the commitment of the coin the caller named, or it
+  is an error; the current document is never returned in its place.
 - **Representations other than `application/did+ld+json`.**
 - **DID URL dereferencing** — path, query, and fragment dereferencing beyond
   the document itself.

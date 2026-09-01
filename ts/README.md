@@ -44,12 +44,20 @@ const result = await resolver.resolve(
 - **Deactivation** (spec §7.4), recognizing both the null encoding and the
   protocol's uniform inert-tree sentinels — which are *derived* from the
   all-zero leaf, never hardcoded.
+- **Version-specific resolution** (spec §7.2.1): `versionId` — a singleton
+  generation's coin id — and `versionTime` walk the DID's lineage and answer
+  for the generation the caller named. A superseded generation reveals its own
+  state in its own spend, so history is served under the same puzzle-hash
+  commitment current state is served under, with no state transition replayed;
+  the result carries `created`, and `nextVersionId` / `nextUpdate` when the
+  version has been superseded. The two options are mutually exclusive, as DID
+  Resolution requires. See
+  [ADR 0004](docs/adr/0004-version-specific-resolution.md).
 
-Not implemented, and **refused rather than faked**: version-specific resolution
-and every representation but one. A request carrying `versionId` or
-`versionTime` returns `unsupportedResolutionOption`, and an `accept` this
-resolver cannot produce returns the standard `representationNotSupported`
-rather than `application/did+ld+json` under another name . Per RFC 9110 §12.5.1 that includes an
+Not implemented, and **refused rather than faked**: every representation but
+one. An `accept` this resolver cannot produce returns the standard
+`representationNotSupported` rather than `application/did+ld+json` under
+another name . Per RFC 9110 §12.5.1 that includes an
 `accept` naming the JSON-LD type with `q=0` ("not acceptable", not a weak
 preference) and one naming a media parameter the representation does not carry,
 such as a JSON-LD `profile` this resolver does not emit — media parameters
@@ -58,7 +66,8 @@ extensions and are ignored. The most specific matching range decides, so
 `application/did+ld+json, */*;q=0` is still served, and a UTF-8 `charset` is
 satisfied because the representation is UTF-8 by construction — answering a question
 the caller did not ask is the one failure they cannot detect. Also not
-implemented: DID URL dereferencing, and multi-key Merkle-path replay for verification-method
+implemented: DID URL dereferencing — including the version-specific form
+(`?versionId=…#fragment`) — and multi-key Merkle-path replay for verification-method
 enumeration (a v1 limitation shared with the Python reference — a multi-class
 DID publishes its authentication commitment and no verification methods). See
 [ADR 0003](docs/adr/0003-verification-scope-v1.md).

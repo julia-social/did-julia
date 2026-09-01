@@ -132,7 +132,7 @@ This is a live mainnet DID. Its method-specific identifier decodes to the 32-oct
 
 ### 5.4 DID URLs
 
-`did:julia` DIDs support the path, query, and fragment components defined by [DID 1.1 syntax](https://www.w3.org/TR/did-1.1/#did-url-syntax). This specification defines fragment identifiers for verification methods in [Section 8.2](#82-verification-methods). No method-specific path or query parameters are defined in this version.
+`did:julia` DIDs support the path, query, and fragment components defined by [DID 1.1 syntax](https://www.w3.org/TR/did-1.1/#did-url-syntax). This specification defines fragment identifiers for verification methods in [Section 8.2](#82-verification-methods). The method-independent `versionId` and `versionTime` DID parameters are supported; their `did:julia` semantics are defined in [Section 7.2.1](#721-version-specific-resolution). No method-specific path or query parameters are defined in this version.
 
 ---
 
@@ -204,6 +204,35 @@ Any Chia full node can answer. Resolution requires no participation from Julia S
 A DID whose launcher ID does not correspond to a valid `did:julia` creation ([7.1](#71-create)) does not exist; resolution MUST return a `notFound` error. A DID in the deactivated state resolves per [7.4](#74-deactivate).
 
 **DID Document contents and the DataLayer pointer.** Slot 7 of the DID state may carry the launcher ID of a Chia DataLayer singleton holding extended DID Document contents (service endpoints and other metadata) as structured key-value pairs. The pointer mechanism — announcing and updating slot 7 — is shipped. **The publication path that writes DID Document contents to DataLayer and resolves them for readers is specified and not yet implemented.** Until it ships, no `did:julia` DID has a linked document, and a conforming resolver produces the *default DID Document* defined in [Section 8](#8-did-documents) from on-chain singleton state alone. A `did:julia` DID is fully usable without any DID Document lookup: the only required element of a DID Document is the DID itself, and `did:julia` verification runs against chain state rather than against document contents.
+
+### 7.2.1 Version-specific resolution
+
+Every state change is a new singleton generation, and every generation the DID has ever had remains on chain. `did:julia` therefore supports the method-independent `versionId` and `versionTime` DID parameters, which a resolver accepts as DID resolution options or as DID URL query parameters. They are **mutually exclusive**: a request carrying both MUST be refused rather than answered by one of them.
+
+A `did:julia` **version ID is the coin ID of a singleton generation** — the same value [Section 8.5](#85-resolution-metadata) requires in `versionId` document metadata. Version IDs are 32-octet content commitments, not sequence numbers: a coin ID is the hash of the coin's own parent, puzzle hash, and amount, so a version ID names one specific generation of one specific DID and cannot be guessed forward. A resolver MUST accept the value in lower-case hexadecimal, with or without a `0x` prefix.
+
+Resolution proceeds as follows:
+
+1. Decode and validate the method-specific identifier per [Section 5.2](#52-validation), yielding the launcher ID.
+2. Walk the singleton's descendant chain from the launcher, recording every generation. This is the traversal of [Section 7.2](#72-read-resolve) run to completion rather than stopped at the unspent coin.
+3. Select the requested generation:
+   - **`versionId`** selects the generation whose coin ID equals the requested value.
+   - **`versionTime`** — an [XML datetime](https://www.w3.org/TR/xmlschema11-2/#dateTime) carrying a UTC designator or an explicit offset — selects the *latest* generation whose confirming block timestamp is at or before the requested time. A singleton may be spent more than once in a single block, so several generations can share a timestamp; the last of them is the state that block left behind, and is the one selected.
+4. Read that generation's state:
+   - A **superseded** generation reveals its own state in its own spend: every `julia_did` solution carries the spend's pre-spend eight-slot state verbatim as its first inner argument, and the coin's puzzle curries in that state's hash. No state transition need be replayed, and none is trusted.
+   - The **current** (unspent) generation has no spend of its own and is read exactly as in [Section 7.2](#72-read-resolve).
+5. Verify before serving. A resolver MUST check that the revealed puzzle hashes to the generation's on-chain puzzle hash and that the state read out of the spend recomputes to that same puzzle hash. Because the commitment checked is the one held by the coin the caller named, a resolver cannot substitute a different version — including the current one — for the version requested.
+6. Construct the DID Document per [Section 8](#8-did-documents) and populate document metadata per [Section 8.5](#85-resolution-metadata).
+
+The first generation is always resolvable this way: creation requires the eve coin to be spent in the same spend bundle that creates it ([7.1](#71-create)), so it has a spend of its own from the moment the DID exists.
+
+Verification-method enumeration ([8.2](#82-verification-methods)) applies to the *requested* version: a key is listed only when its membership in that generation's authentication Merkle root is proven, which is what makes a historical document usable for checking a signature made while that version was current ([7.3](#73-update)).
+
+Errors are distinguished:
+
+- A well-formed `versionId` that no generation of the DID has, and a `versionTime` earlier than the DID's first generation, are `notFound`: the version named does not exist.
+- A `versionId` that is not a 32-octet hex value, and a `versionTime` that is not an XML datetime with a UTC designator or offset, are `invalidDidUrl`.
+- A resolver that does not implement version-specific resolution MUST refuse the option rather than returning the current document in its place; silently answering a different question than the one asked is the one failure a caller cannot detect.
 
 ### 7.3 Update
 
@@ -337,8 +366,15 @@ A multisig organizational DID differs in `juliaAuthentication` (multiple classes
 Resolvers MUST populate DID document metadata with at least:
 
 - `deactivated`: per [7.4](#74-deactivate);
-- `versionId`: the coin ID of the singleton generation the document was read from;
+- `versionId`: the coin ID of the singleton generation the document was read from, hexadecimal with a `0x` prefix;
 - `updated`: the timestamp of the block confirming that generation, when the resolver has it.
+
+A result produced by version-specific resolution ([7.2.1](#721-version-specific-resolution)) MUST additionally carry, since walking the lineage establishes them:
+
+- `created`: the timestamp of the block confirming the DID's first generation;
+- `nextVersionId` and `nextUpdate`: the coin ID of the generation that superseded the one resolved, and the timestamp of the block confirming it — present only when the resolved version is not the current one.
+
+Current-state resolution reports only what a single reading of the unspent coin establishes, so that its metadata does not vary with which traversal a node's RPC surface allowed. All timestamps are XML datetimes in UTC without sub-second precision.
 
 ---
 
@@ -532,6 +568,8 @@ This section addresses the privacy topics [DID 1.1 §7.4](https://www.w3.org/TR/
 | Production drivers (Rust) and mobile app (not.bot) | **Shipped** (proprietary) |
 | DataLayer DID Document publication and resolution ([7.2](#72-read-resolve)) | **Specified, not implemented** |
 | Python reference resolver (this repository, `src/did_julia/`) | **Shipped** — resolves live mainnet DIDs and verifies recomputed state against the on-chain singleton puzzle hash |
+| TypeScript resolver for the DIF `did-resolver` interface (this repository, `ts/`) | **Shipped** — same verification, no CLVM execution; byte-equivalent to the Python reference against the committed mainnet recordings |
+| Version-specific resolution: `versionId` and `versionTime` ([7.2.1](#721-version-specific-resolution)) | **Shipped** in both resolvers |
 | VC 2.0 export driver ([Section 9.6](#96-mapping-claims-to-a-vc-20-document)) | **Planned** |
 | Universal Resolver / Universal Registrar drivers | **Planned** |
 

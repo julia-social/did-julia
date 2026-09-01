@@ -24,6 +24,15 @@ result = resolve("did:julia:ArD2JyqfkVVbT9Liegqu4jcfBEXtHnPofmF2rsBuq1TX")
 print(result["didDocument"])
 ```
 
+Every state change is a new singleton generation, and all of them stay on chain, so a DID resolves at a point in its history as readily as at its tip (spec §7.2.1):
+
+```python
+resolve(did, version_time="2026-08-01T00:00:00Z")
+resolve(did, version_id="0x2af60aad4e7519bf9ee3eb0fd5624aaf608b066f51bb506207af35f6a0299ca5")
+```
+
+A version id is the coin id of the generation the document was read from. A superseded generation reveals its own state in its own spend, so a historical document is served under exactly the puzzle-hash commitment a current one is — a version that cannot be verified is an error, never the current document in its place.
+
 Resolution reads public Chia blockchain state — by default through the open [Coinset](https://coinset.org) mainnet RPC, or your own full node via `FullNodeClient(base_url=..., cert=...)`. The resolver does not trust its data source: it recomputes the singleton's full puzzle hash from the parsed state and checks it against the on-chain coin (`did:julia:stateVerified` in the resolution metadata). Tests run offline against committed mainnet fixtures: `python -m pytest`.
 
 Dependencies are `requests` and `chia_rs` (the consensus VM binding, used only to execute the most recent spend for its state-carrying `REMARK` condition); base58, CLVM (de)serialization, tree hashing, and curried-puzzle-hash math are implemented in readable pure Python.

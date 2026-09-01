@@ -249,6 +249,48 @@ def extract_state_from_spend(spend: CoinSpend, launcher_id: bytes) -> JuliaDidSt
     )
 
 
+def revealed_state_from_spend(
+    spend: CoinSpend, coin_puzzle_hash: bytes, launcher_id: bytes
+) -> JuliaDidState:
+    """The state a SPENT generation held, read from its own spend (spec §7.2.1).
+
+    Every ``julia_did`` solution reveals the spend's own pre-spend state as its
+    first inner argument — the coin's puzzle curries in that state's hash, so
+    the reveal is what the coin committed to. Nothing here is taken on trust:
+    the puzzle reveal must hash to the coin's on-chain puzzle hash, and the
+    state read out of the solution must recompute to that same hash. A wrong
+    or tampered reveal fails both checks rather than producing a document.
+
+    This is the route version-specific resolution takes for every superseded
+    generation. It needs no state transition at all — the state is *revealed*
+    rather than derived — and it works for the DID's first generation, whose
+    parent is the launcher and therefore REMARKs nothing.
+    """
+    puzzle = deserialize(spend.puzzle_reveal)
+    if sha256tree(puzzle) != coin_puzzle_hash:
+        raise StateError(
+            "spend puzzle reveal does not hash to its coin's puzzle hash"
+        )
+    solution = deserialize(spend.solution)
+    try:
+        outer = to_list(solution)              # (lineage_proof amount inner_solution)
+        inner = to_list(outer[2])              # (curried-args parent-info solution)
+        curried_args = inner[0]
+    except (ValueError, IndexError) as e:
+        raise StateError(f"spend solution is not a julia_did solution: {e}")
+    state = parse_state(curried_args)
+    if state.launcher_id != launcher_id:
+        raise StateError(
+            "the state revealed by this spend belongs to a different DID"
+        )
+    if not verify_state(state, coin_puzzle_hash):
+        raise StateError(
+            "the state revealed by this spend does not recompute to the coin's "
+            "own puzzle hash"
+        )
+    return state
+
+
 def expected_puzzle_hash(state: JuliaDidState) -> bytes:
     """Recompute the singleton's full puzzle hash from parsed state (spec §6.1):
     singleton_top_layer_v1_1 curried with (SINGLETON_STRUCT, julia_did curried
