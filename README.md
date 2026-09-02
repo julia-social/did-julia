@@ -1,5 +1,7 @@
 # did-julia
 
+[![tests](https://github.com/julia-social/did-julia/actions/workflows/tests.yml/badge.svg)](https://github.com/julia-social/did-julia/actions/workflows/tests.yml)
+
 The specification and reference material for **`did:julia`**, a [W3C Decentralized Identifier](https://www.w3.org/TR/did-1.1/) method rooted in [Chia blockchain](https://www.chia.net/) singletons, operated by [Julia Social](https://not.bot).
 
 A `did:julia` identifier is the base58 encoding of a Chia singleton launcher ID — a hash commitment to the DID's original BLS12-381 key. A DID's full key history verifies from genesis, signatures survive key rotation, and every resolution and credential verification is a read of public chain state: no identity provider sits on the verification path.
@@ -10,6 +12,7 @@ A `did:julia` identifier is the base58 encoding of a Chia singleton launcher ID 
 - **[src/did_julia/](src/did_julia/)** — the Python reference resolver.
 - **[ts/](ts/)** — the TypeScript resolver for the DIF `did-resolver` interface, for edge runtimes.
 - **[registration/](registration/)** — the W3C DID method registry entry.
+- **[scripts/check_canaries.py](scripts/check_canaries.py)** — resolves the canary DIDs against live mainnet, including every generation of each by `versionId` and `versionTime`.
 
 ## The reference resolver
 
@@ -33,7 +36,7 @@ resolve(did, version_id="0x2af60aad4e7519bf9ee3eb0fd5624aaf608b066f51bb506207af3
 
 A version id is the coin id of the generation the document was read from. A superseded generation reveals its own state in its own spend, so a historical document is served under exactly the puzzle-hash commitment a current one is — a version that cannot be verified is an error, never the current document in its place.
 
-Resolution reads public Chia blockchain state — by default through the open [Coinset](https://coinset.org) mainnet RPC, or your own full node via `FullNodeClient(base_url=..., cert=...)`. The resolver does not trust its data source: it recomputes the singleton's full puzzle hash from the parsed state and checks it against the on-chain coin (`did:julia:stateVerified` in the resolution metadata). Tests run offline against committed mainnet fixtures: `python -m pytest`.
+Resolution reads public Chia blockchain state — by default through the open [Coinset](https://coinset.org) mainnet RPC, or your own full node via `FullNodeClient(base_url=..., cert=...)`. The resolver does not trust its data source: it recomputes the singleton's full puzzle hash from the parsed state and checks it against the on-chain coin (`did:julia:stateVerified` in the resolution metadata). Tests run offline against committed mainnet fixtures: `python -m pytest`. Both suites run in CI on every push, over Python 3.10–3.13 and Node 20 and 22; a weekly scheduled job additionally resolves the canary DIDs against live mainnet, so a chain-side change is noticed here rather than by a user.
 
 Dependencies are `requests` and `chia_rs` (the consensus VM binding, used only to execute the most recent spend for its state-carrying `REMARK` condition); base58, CLVM (de)serialization, tree hashing, and curried-puzzle-hash math are implemented in readable pure Python.
 
