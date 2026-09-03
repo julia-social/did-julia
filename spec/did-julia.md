@@ -316,7 +316,9 @@ Generic DID resolvers and consumers will understand `id`, `verificationMethod`, 
 
 ### 8.4 Example: single-key DID
 
-The DID from [Section 5.3](#53-example), as a genesis-configuration single-key document. This is the document the reference resolver in this repository produces for that live mainnet DID; every value below is real and independently checkable against the chain.
+The DID from [Section 5.3](#53-example), as a genesis-configuration single-key document. Every value below is real and independently checkable against the chain.
+
+That DID has since been rekeyed, so this is the document the reference resolver produces for the *version* that its genesis key governed — `versionId` `0x0e04c04dbb693f72eb5151753bf7b69ec468476945fe50d684e03609cf390f29`, equivalently any `versionTime` between its confirmation and the rekey ([7.2.1](#721-version-specific-resolution)). Resolving the same DID with no version option returns its current document, which carries the *new* authentication commitment and, until a spend authorized under the new key reveals one, no verification method ([8.2](#82-verification-methods)). Both are shown below, because the pair is the method's central property: rotating a key does not invalidate what the retired key signed, since the version that was current at signing time still resolves to it ([7.3](#73-update)).
 
 ```json
 {
@@ -356,6 +358,37 @@ The DID from [Section 5.3](#53-example), as a genesis-configuration single-key d
   }
 }
 ```
+
+The same DID after the rekey, resolved with no version option:
+
+```json
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1",
+    "https://w3id.org/security/multikey/v1",
+    "https://not.bot/ns/did-julia/v1"
+  ],
+  "id": "did:julia:ArD2JyqfkVVbT9Liegqu4jcfBEXtHnPofmF2rsBuq1TX",
+  "juliaAuthentication": {
+    "merkleRoot": "0x76e9c885bf0fa6b637ac3da01c652081ff4d8ab7521ccb8542fd14c2fd5a786c",
+    "classDepth": 1,
+    "requiredClasses": 1,
+    "classes": [{
+      "classId": "0xcce929457b710a08b1e060a2968561ac958388945836589baa7f837903f1df39",
+      "requiredMembers": 1
+    }]
+  },
+  "juliaCustodians": [],
+  "juliaRecovery": {
+    "configured": true,
+    "recoveryAgents": true,
+    "delayBlocks": 4320,
+    "prerotation": "disabled"
+  }
+}
+```
+
+A rekey publishes a commitment, not a key: slot 4 carries the new Merkle root and class identifiers, and the public key itself never appears in DID state ([6.2](#62-authentication-configuration)). The rekey spend reveals only the *outgoing* key, which is what authorized the rotation. So a conforming resolver enumerates no verification method for the new configuration until a later spend proves a key's membership in it — the [8.2](#82-verification-methods) rule applied to a configuration nothing has yet satisfied, rather than a resolver limitation.
 
 For a single-key DID, the key tree has a fixed two-level shape: the class node is the key paired with itself, `(K . K)`, and the root is the pair of that class with the empty atom, so `merkleRoot = sha256tree(((K . K) . 0))` and `classDepth` is 1. The `merkleRoot` and `classId` above recompute from the `publicKeyMultibase` key by exactly that construction.
 

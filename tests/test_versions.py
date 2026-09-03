@@ -14,7 +14,12 @@ import pytest
 from did_julia import resolve
 from did_julia.chain import trace_history
 from did_julia.identifier import parse
-from did_julia.state import StateError, revealed_state_from_spend
+from did_julia.state import (
+    StateError,
+    extract_state_from_spend,
+    revealed_state_from_spend,
+    verify_state,
+)
 
 from conftest import FIXTURES, FixtureClient
 
@@ -22,6 +27,8 @@ ALIAS_DID = "did:julia:ArD2JyqfkVVbT9Liegqu4jcfBEXtHnPofmF2rsBuq1TX"
 ORG_DID = "did:julia:BqJasSrzc9aGJmU4U3A2z4XrqozAAMiMhnqHaq4F2cDc"
 
 ALIAS_GEN1 = "0xe3d06a75d3e2c9ed7b71e18646dbf900d17d0cc55fd6584539ea9f72c01f58aa"
+ALIAS_GEN2 = "0x0e04c04dbb693f72eb5151753bf7b69ec468476945fe50d684e03609cf390f29"
+ALIAS_GEN3 = "0x6db248a37284af64ddc068ee80968363c96d1929ba006e3dc514312e34d2ac33"
 ORG_GEN1 = "0xa61c53bf8dd53c55da7d5ac8b53667c00ca36c87370c67497f20e79cc72e4084"
 ORG_GEN2 = "0x172f7246668c6cf8836e2379fde00006aaefc8543e2ce79a0b021a13fbcc69e6"
 ORG_GEN3 = "0x2af60aad4e7519bf9ee3eb0fd5624aaf608b066f51bb506207af35f6a0299ca5"
@@ -50,6 +57,7 @@ def _expected(name: str) -> dict:
     "fixture,did,version",
     [
         ("ArD2_gen1", ALIAS_DID, ALIAS_GEN1),
+        ("ArD2_gen2", ALIAS_DID, ALIAS_GEN2),
         ("julia_org_gen1", ORG_DID, ORG_GEN1),
         ("julia_org_gen2", ORG_DID, ORG_GEN2),
         ("julia_org_gen3", ORG_DID, ORG_GEN3),
@@ -245,3 +253,68 @@ def test_history_walk_records_every_generation_in_order(org_client):
     ]
     assert not history.generations[-1].spent
     assert all(g.spent for g in history.generations[:-1])
+
+
+# --- resolution across a real rekey --------------------------------------
+#
+# The personal alias was rekeyed on 2026-09-02: generation 3 carries a
+# different authentication root, and a different singleton puzzle hash, from
+# the two before it. It is the first mainnet state *change* either resolver
+# has been tested against — every other recording is a spend that left state
+# untouched — so these cases guard the transition machinery itself.
+
+
+def test_the_rekey_changed_the_authentication_root(alias_client):
+    before = resolve(ALIAS_DID, client=alias_client, version_id=ALIAS_GEN2)
+    after = resolve(ALIAS_DID, client=alias_client, version_id=ALIAS_GEN3)
+    root = lambda r: r["didDocument"]["juliaAuthentication"]["merkleRoot"]
+    assert root(before) != root(after)
+    # Both sides of the change are served only under their own coin's hash.
+    for result in (before, after):
+        assert result["didResolutionMetadata"]["did:julia:stateVerified"] is True
+
+
+def test_the_rekey_is_the_generation_the_history_chains_to(alias_client):
+    meta = resolve(ALIAS_DID, client=alias_client, version_id=ALIAS_GEN2)[
+        "didDocumentMetadata"
+    ]
+    assert meta["nextVersionId"] == ALIAS_GEN3
+    assert meta["nextUpdate"] == "2026-09-02T11:34:09Z"
+
+
+def test_a_retired_key_is_listed_for_the_versions_it_governed(alias_client):
+    """The method's point: a signature made under a key that has since been
+    rotated out still verifies, because the version that was current when it
+    was made still resolves to that key."""
+    governed = resolve(ALIAS_DID, client=alias_client, version_id=ALIAS_GEN2)[
+        "didDocument"
+    ]
+    current = resolve(ALIAS_DID, client=alias_client)["didDocument"]
+    assert len(governed["verificationMethod"]) == 1
+    assert "verificationMethod" not in current
+
+
+def test_the_post_rekey_state_is_derived_not_revealed(alias_client):
+    """Generation 3 is unspent, so its state cannot be read from a spend of its
+    own — it is derived from the rekey spend and accepted only because it
+    reproduces generation 3's on-chain puzzle hash."""
+    launcher_id = parse(ALIAS_DID)
+    history = trace_history(alias_client, launcher_id)
+    assert len(history.generations) == 3
+    current = history.generations[-1]
+    assert not current.spent
+    parent = history.generations[-2]
+    assert parent.coin.puzzle_hash != current.coin.puzzle_hash
+    spend = alias_client.get_puzzle_and_solution(
+        parent.coin.coin_id(), parent.spent_block_index
+    )
+    # The spend reveals the OLD state; the new one is not in it verbatim.
+    revealed = revealed_state_from_spend(
+        spend, parent.coin.puzzle_hash, launcher_id
+    )
+    assert not verify_state(revealed, current.coin.puzzle_hash)
+    derived = extract_state_from_spend(spend, launcher_id)
+    assert verify_state(derived, current.coin.puzzle_hash)
+    assert (
+        derived.authentication.merkle_root != revealed.authentication.merkle_root
+    )

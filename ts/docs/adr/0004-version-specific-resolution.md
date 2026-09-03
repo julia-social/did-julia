@@ -106,10 +106,20 @@ unsupported, not either option.
 ## Validation
 
 Both mainnet canaries are replayed offline for every generation they have — the
-organization DID has four, the personal alias two — and the TypeScript results
+organization DID has four, the personal alias three — and the TypeScript results
 are compared byte for byte against the Python reference resolver's output for
 the same requests, the same way current-state resolution is compared. Every
 generation is served only after its own coin's puzzle hash is reproduced.
+
+The alias's third generation is a **rekey** (block 9235350, 2026-09-02), which
+makes it the case this design most needed: its two earlier versions resolve to
+the key the DID was created with, and its current version resolves to the new
+authentication commitment with no verification method, because a rekey publishes
+a commitment and the incoming key is not on chain until a spend proves
+membership in it. A signature made under the retired key is still verifiable —
+resolve the DID at a `versionTime` before the rekey and the key that governed it
+is right there. That is the property the registry editor's question was really
+about.
 
 ## What this does not add
 
