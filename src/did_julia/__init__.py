@@ -18,7 +18,7 @@ Version-specific resolution (spec §7.2.1) is supported through the
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
 from . import identifier
@@ -46,7 +46,25 @@ from .state import (
 __version__ = "0.1.0"
 __all__ = ["resolve", "FullNodeClient", "identifier"]
 
-_FRACTION = re.compile(r"\.(\d+)")
+# An XML datetime, the form DID Resolution requires, with a UTC designator or
+# an explicit offset. The fields are validated below rather than handed to a
+# parser: `datetime.fromisoformat` accepts basic-format strings on Python 3.11+
+# and rejects them on 3.10, so relying on it would make this resolver's contract
+# depend on the interpreter it happens to run under.
+_XML_DATETIME = re.compile(
+    r"^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})"
+    r"T(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2})"
+    r"(?:\.\d+)?"
+    r"(?:[Zz]|(?P<sign>[+-])(?P<offset_hour>\d{2}):(?P<offset_minute>\d{2}))$"
+)
+
+_MONTH_LENGTHS = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
+
+def _days_in_month(year: int, month: int) -> int:
+    if month == 2 and year % 4 == 0 and (year % 100 != 0 or year % 400 == 0):
+        return 29
+    return _MONTH_LENGTHS[month - 1]
 
 
 def _parse_version_id(value: str) -> bytes:
@@ -64,18 +82,54 @@ def _parse_version_id(value: str) -> bytes:
 
 
 def _parse_version_time(value: str) -> int:
-    """XML datetime -> POSIX seconds. Sub-second precision is truncated: the
-    DID Resolution specification requires datetimes without it, and a Chia
-    block's timestamp has one-second resolution anyway."""
-    text = _FRACTION.sub("", value.strip(), count=1)
-    if text[-1:] in ("Z", "z"):
-        text = text[:-1] + "+00:00"
-    parsed = datetime.fromisoformat(text)
-    if parsed.tzinfo is None:
+    """XML datetime -> POSIX seconds.
+
+    Every field is range-checked against the calendar, so a date that does not
+    exist is rejected rather than rolled forward into one that does: a resolver
+    that answered ``2026-02-30`` with the version current on 2026-03-02 would be
+    answering a different question than the caller asked, which is the one
+    failure they cannot detect.
+
+    Sub-second precision is truncated — the DID Resolution specification
+    requires datetimes without it, and a Chia block's timestamp has one-second
+    resolution anyway.
+    """
+    match = _XML_DATETIME.match(value.strip())
+    if match is None:
         raise ValueError(
-            "versionTime must carry a UTC designator or an explicit offset"
+            "versionTime must be an XML datetime carrying a UTC designator or "
+            f"an explicit offset; got {value!r}"
         )
-    return int(parsed.astimezone(timezone.utc).timestamp())
+    year, month, day, hour, minute, second = (
+        int(match.group(name))
+        for name in ("year", "month", "day", "hour", "minute", "second")
+    )
+    if not 1 <= month <= 12:
+        raise ValueError(f"versionTime month must be in 1..12; got {month}")
+    if not 1 <= day <= _days_in_month(year, month):
+        raise ValueError(
+            f"versionTime day {day} does not exist in month {month} of {year}"
+        )
+    if hour > 23 or minute > 59 or second > 59:
+        raise ValueError(
+            f"versionTime {hour:02d}:{minute:02d}:{second:02d} is not a time of day"
+        )
+
+    offset = timezone.utc
+    if match.group("sign") is not None:
+        offset_hour = int(match.group("offset_hour"))
+        offset_minute = int(match.group("offset_minute"))
+        if offset_hour > 23 or offset_minute > 59:
+            raise ValueError(
+                f"versionTime carries an impossible UTC offset "
+                f"{match.group('sign')}{offset_hour:02d}:{offset_minute:02d}"
+            )
+        delta = timedelta(hours=offset_hour, minutes=offset_minute)
+        offset = timezone(-delta if match.group("sign") == "-" else delta)
+
+    return int(
+        datetime(year, month, day, hour, minute, second, tzinfo=offset).timestamp()
+    )
 
 
 def _select_generation(

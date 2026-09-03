@@ -232,6 +232,7 @@ Errors are distinguished:
 
 - A well-formed `versionId` that no generation of the DID has, and a `versionTime` earlier than the DID's first generation, are `notFound`: the version named does not exist.
 - A `versionId` that is not a 32-octet hex value, and a `versionTime` that is not an XML datetime with a UTC designator or offset, are `invalidDidUrl`.
+- A `versionTime` naming a date or time that does not exist — `2026-02-30`, February 29th of a non-leap year, hour 24, an offset beyond ±23:59 — MUST be refused as `invalidDidUrl`. A resolver MUST NOT normalize it into a date that does exist and answer for that: returning the version current on 2026-03-02 to a caller who asked about 2026-02-30 is indistinguishable, to that caller, from a correct answer.
 - A resolver that does not implement version-specific resolution MUST refuse the option rather than returning the current document in its place; silently answering a different question than the one asked is the one failure a caller cannot detect.
 
 ### 7.3 Update

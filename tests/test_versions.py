@@ -181,15 +181,71 @@ def test_malformed_version_id_is_an_invalid_did_url(version_id):
     assert meta["error"] == "invalidDidUrl"
 
 
-@pytest.mark.parametrize(
-    "version_time",
-    ["yesterday", "2026-08-01", "2026-08-01T00:00:00", "2026-13-01T00:00:00Z"],
-)
+# Kept identical, case for case, to the list in the TypeScript suite: the two
+# resolvers must agree about which requests are even valid, and a date that does
+# not exist must be refused rather than rolled forward into one that does. A
+# resolver that answered "2026-02-30" with the version current on 2026-03-02
+# would be answering a different question than the caller asked.
+REFUSED_TIMES = [
+    "yesterday",
+    "",
+    "2026-08-01",  # date only, no time
+    "2026-08-01T00:00:00",  # no UTC designator or offset
+    "2026-13-01T00:00:00Z",  # month 13
+    "2026-00-10T00:00:00Z",  # month 0
+    "2026-01-32T00:00:00Z",  # day 32
+    "2026-01-00T00:00:00Z",  # day 0
+    "2026-02-30T00:00:00Z",  # February has no 30th
+    "2026-04-31T00:00:00Z",  # April has no 31st
+    "2026-02-29T00:00:00Z",  # 2026 is not a leap year
+    "2100-02-29T00:00:00Z",  # nor is 2100 — divisible by 100, not by 400
+    "2026-01-01T24:00:00Z",  # hour 24
+    "2026-01-01T23:60:00Z",  # minute 60
+    "2026-01-01T23:59:60Z",  # leap second
+    "2026-01-01T00:00:00+25:00",  # impossible offset
+    "2026-01-01T00:00:00+00:60",  # impossible offset minutes
+    "2026-01-01T00:00:00-99:99",
+]
+
+
+@pytest.mark.parametrize("version_time", REFUSED_TIMES)
 def test_malformed_version_time_is_an_invalid_did_url(version_time):
     meta = resolve(ORG_DID, client=None, version_time=version_time)[
         "didResolutionMetadata"
     ]
     assert meta["error"] == "invalidDidUrl"
+
+
+@pytest.mark.parametrize(
+    "version_time", ["2028-02-29T00:00:00Z", "2000-02-29T00:00:00Z"]
+)
+def test_real_leap_days_are_accepted(org_client, version_time):
+    """The refusals above are about dates that do not exist, not about February
+    29th: 2028 is a leap year, and 2000 is one under the 400-year rule."""
+    meta = resolve(ORG_DID, client=org_client, version_time=version_time)[
+        "didResolutionMetadata"
+    ]
+    assert meta.get("error") in (None, "notFound")
+    assert meta.get("error") != "invalidDidUrl"
+
+
+def test_an_offset_time_and_its_utc_equivalent_select_the_same_version(
+    org_client,
+):
+    same = [
+        resolve(ORG_DID, client=org_client, version_time=t)["didDocumentMetadata"][
+            "versionId"
+        ]
+        for t in ("2026-08-01T00:00:00Z", "2026-07-31T20:00:00-04:00")
+    ]
+    assert same[0] == same[1]
+
+
+def test_sub_second_precision_is_truncated_not_rejected(org_client):
+    assert (
+        resolve(ORG_DID, client=org_client, version_time="2026-08-01T00:00:00.500Z")
+        == resolve(ORG_DID, client=org_client, version_time="2026-08-01T00:00:00Z")
+    )
 
 
 def test_version_id_and_version_time_are_mutually_exclusive():
