@@ -1,8 +1,10 @@
 name: tests
 
 on:
+  # Pull requests cover every branch; pushing to main covers the merge itself.
+  # Running on both events for every branch would double every check.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
   schedule:
@@ -35,6 +37,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e . pytest
+          python -c "import chia_rs, did_julia.clvm_util as c; print('chia_rs', getattr(chia_rs, '__version__', 'unknown'), 'RUN_FLAGS', c.RUN_FLAGS)"
       # The suite replays the committed mainnet recordings in tests/fixtures;
       # it makes no network calls, so a Coinset outage can never fail a PR.
       - name: Test
