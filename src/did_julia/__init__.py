@@ -46,15 +46,15 @@ from .state import (
 __version__ = "0.1.0"
 __all__ = ["resolve", "FullNodeClient", "identifier"]
 
-# An XML datetime, the form DID Resolution requires, with a UTC designator or
-# an explicit offset. The fields are validated below rather than handed to a
-# parser: `datetime.fromisoformat` accepts basic-format strings on Python 3.11+
-# and rejects them on 3.10, so relying on it would make this resolver's contract
+# An XML Schema dateTime with a timezone, the form DID Resolution requires.
+# The fields are validated below rather than handed to a parser:
+# `datetime.fromisoformat` accepts basic-format strings on Python 3.11+ and
+# rejects them on 3.10, so relying on it would make this resolver's contract
 # depend on the interpreter it happens to run under.
 _XML_DATETIME = re.compile(
     r"^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})"
     r"T(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2})"
-    r"(?:\.\d+)?"
+    r"(?:\.(?P<fraction>\d+))?"
     r"(?:[Zz]|(?P<sign>[+-])(?P<offset_hour>\d{2}):(?P<offset_minute>\d{2}))$"
 )
 
@@ -110,7 +110,19 @@ def _parse_version_time(value: str) -> int:
         raise ValueError(
             f"versionTime day {day} does not exist in month {month} of {year}"
         )
-    if hour > 23 or minute > 59 or second > 59:
+
+    # `24:00:00` is XML Schema's end-of-day form and denotes the following
+    # day's midnight (xmlschema11-2 §3.3.8, endOfDayFrag). It is a defined
+    # lexical mapping onto one unambiguous instant, not a value being coerced
+    # into a different one, so honouring it answers exactly the question asked.
+    fraction = match.group("fraction")
+    end_of_day = hour == 24
+    if end_of_day:
+        if minute or second or (fraction is not None and set(fraction) != {"0"}):
+            raise ValueError(
+                "versionTime hour 24 is only the end-of-day form 24:00:00"
+            )
+    elif hour > 23 or minute > 59 or second > 59:
         raise ValueError(
             f"versionTime {hour:02d}:{minute:02d}:{second:02d} is not a time of day"
         )
@@ -119,17 +131,27 @@ def _parse_version_time(value: str) -> int:
     if match.group("sign") is not None:
         offset_hour = int(match.group("offset_hour"))
         offset_minute = int(match.group("offset_minute"))
-        if offset_hour > 23 or offset_minute > 59:
+        # XML Schema admits offsets of ±00:00 through ±13:59, plus exactly
+        # ±14:00 — the range real timezones occupy. Anything wider is not an
+        # XML datetime, whatever instant it might seem to denote.
+        if not (
+            (offset_hour <= 13 and offset_minute <= 59)
+            or (offset_hour == 14 and offset_minute == 0)
+        ):
             raise ValueError(
-                f"versionTime carries an impossible UTC offset "
-                f"{match.group('sign')}{offset_hour:02d}:{offset_minute:02d}"
+                f"versionTime carries a UTC offset outside XML Schema's "
+                f"±14:00 range: {match.group('sign')}"
+                f"{offset_hour:02d}:{offset_minute:02d}"
             )
         delta = timedelta(hours=offset_hour, minutes=offset_minute)
         offset = timezone(-delta if match.group("sign") == "-" else delta)
 
-    return int(
-        datetime(year, month, day, hour, minute, second, tzinfo=offset).timestamp()
+    moment = datetime(
+        year, month, day, 0 if end_of_day else hour, minute, second, tzinfo=offset
     )
+    if end_of_day:
+        moment += timedelta(days=1)
+    return int(moment.timestamp())
 
 
 def _select_generation(

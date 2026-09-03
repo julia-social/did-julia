@@ -199,9 +199,15 @@ REFUSED_TIMES = [
     "2026-04-31T00:00:00Z",  # April has no 31st
     "2026-02-29T00:00:00Z",  # 2026 is not a leap year
     "2100-02-29T00:00:00Z",  # nor is 2100 — divisible by 100, not by 400
-    "2026-01-01T24:00:00Z",  # hour 24
+    "2026-01-01T25:00:00Z",  # hour 25
     "2026-01-01T23:60:00Z",  # minute 60
     "2026-01-01T23:59:60Z",  # leap second
+    "2026-08-01T24:00:01Z",  # hour 24 is the end-of-day form only
+    "2026-08-01T24:30:00Z",
+    "2026-08-01T24:00:00.5Z",  # a non-zero fraction is not end-of-day
+    "2026-01-01T00:00:00+14:01",  # beyond XML Schema's ±14:00
+    "2026-01-01T00:00:00+23:59",
+    "2026-01-01T00:00:00-14:30",
     "2026-01-01T00:00:00+25:00",  # impossible offset
     "2026-01-01T00:00:00+00:60",  # impossible offset minutes
     "2026-01-01T00:00:00-99:99",
@@ -239,6 +245,34 @@ def test_an_offset_time_and_its_utc_equivalent_select_the_same_version(
         for t in ("2026-08-01T00:00:00Z", "2026-07-31T20:00:00-04:00")
     ]
     assert same[0] == same[1]
+
+
+@pytest.mark.parametrize(
+    "version_time",
+    [
+        "2026-01-01T00:00:00+14:00",
+        "2026-01-01T00:00:00-14:00",
+        "2026-01-01T00:00:00+13:59",
+    ],
+)
+def test_offsets_within_the_xml_schema_range_are_accepted(org_client, version_time):
+    """±14:00 is the edge of XML Schema's timezone range, and the edge of the
+    range real timezones occupy — it is admitted, and only past it is not."""
+    meta = resolve(ORG_DID, client=org_client, version_time=version_time)[
+        "didResolutionMetadata"
+    ]
+    assert meta.get("error") != "invalidDidUrl"
+
+
+def test_end_of_day_is_the_next_midnight(org_client):
+    """`24:00:00` is XML Schema's end-of-day form (§3.3.8, endOfDayFrag), and
+    denotes the following day's midnight. It names one unambiguous instant, so
+    honouring it answers the question asked — unlike a date that does not exist,
+    which has no instant to name."""
+    assert (
+        resolve(ORG_DID, client=org_client, version_time="2026-08-01T24:00:00Z")
+        == resolve(ORG_DID, client=org_client, version_time="2026-08-02T00:00:00Z")
+    )
 
 
 def test_sub_second_precision_is_truncated_not_rejected(org_client):

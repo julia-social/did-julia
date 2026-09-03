@@ -217,7 +217,7 @@ Resolution proceeds as follows:
 2. Walk the singleton's descendant chain from the launcher, recording every generation. This is the traversal of [Section 7.2](#72-read-resolve) run to completion rather than stopped at the unspent coin.
 3. Select the requested generation:
    - **`versionId`** selects the generation whose coin ID equals the requested value.
-   - **`versionTime`** — an [XML datetime](https://www.w3.org/TR/xmlschema11-2/#dateTime) carrying a UTC designator or an explicit offset — selects the *latest* generation whose confirming block timestamp is at or before the requested time. A singleton may be spent more than once in a single block, so several generations can share a timestamp; the last of them is the state that block left behind, and is the one selected.
+   - **`versionTime`** — an [XML Schema `dateTime`](https://www.w3.org/TR/xmlschema11-2/#dateTime) carrying a timezone, either the `Z` designator or an explicit offset — selects the *latest* generation whose confirming block timestamp is at or before the requested time. A singleton may be spent more than once in a single block, so several generations can share a timestamp; the last of them is the state that block left behind, and is the one selected.
 4. Read that generation's state:
    - A **superseded** generation reveals its own state in its own spend: every `julia_did` solution carries the spend's pre-spend eight-slot state verbatim as its first inner argument, and the coin's puzzle curries in that state's hash. No state transition need be replayed, and none is trusted.
    - The **current** (unspent) generation has no spend of its own and is read exactly as in [Section 7.2](#72-read-resolve).
@@ -231,8 +231,10 @@ Verification-method enumeration ([8.2](#82-verification-methods)) applies to the
 Errors are distinguished:
 
 - A well-formed `versionId` that no generation of the DID has, and a `versionTime` earlier than the DID's first generation, are `notFound`: the version named does not exist.
-- A `versionId` that is not a 32-octet hex value, and a `versionTime` that is not an XML datetime with a UTC designator or offset, are `invalidDidUrl`.
-- A `versionTime` naming a date or time that does not exist — `2026-02-30`, February 29th of a non-leap year, hour 24, an offset beyond ±23:59 — MUST be refused as `invalidDidUrl`. A resolver MUST NOT normalize it into a date that does exist and answer for that: returning the version current on 2026-03-02 to a caller who asked about 2026-02-30 is indistinguishable, to that caller, from a correct answer.
+- A `versionId` that is not a 32-octet hex value, and a `versionTime` that is not an XML Schema `dateTime` carrying a timezone, are `invalidDidUrl`.
+- A `versionTime` naming a date or time that **does not exist** MUST be refused as `invalidDidUrl`, and a resolver MUST NOT normalize it into one that does and answer for that. Returning the version current on 2026-03-02 to a caller who asked about `2026-02-30` is, to that caller, indistinguishable from a correct answer. The refusal covers a day past the real length of its month (`2026-02-30`, `2026-04-31`), February 29th outside a leap year under the proleptic Gregorian rule (`2026-02-29`, `2100-02-29`), an hour, minute or second out of range, and a timezone offset outside the `-14:00`..`+14:00` range XML Schema admits — the range real timezones occupy.
+- Conversely, a `versionTime` that names an instant unambiguously MUST be honoured even where its form is unusual. `24:00:00` is XML Schema's end-of-day form and denotes the following day's midnight; a resolver answers for that instant. This is not in tension with the rule above: an end-of-day time has an instant to name, whereas a date that does not exist has none, and inventing one is what that rule forbids.
+- Resolvers MAY restrict the year to four digits, refusing the expanded and negative years XML Schema also admits; the reference implementations do.
 - A resolver that does not implement version-specific resolution MUST refuse the option rather than returning the current document in its place; silently answering a different question than the one asked is the one failure a caller cannot detect.
 
 ### 7.3 Update
