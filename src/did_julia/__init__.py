@@ -104,6 +104,14 @@ def _parse_version_time(value: str) -> int:
         int(match.group(name))
         for name in ("year", "month", "day", "hour", "minute", "second")
     )
+    # XML Schema admits year 0000 (1 BCE under astronomical numbering) and
+    # expanded years beyond four digits; this resolver accepts 0001..9999, the
+    # range both implementations can represent exactly, and refuses the rest
+    # rather than mapping it somewhere it does not belong.
+    if year < 1:
+        raise ValueError(
+            f"versionTime year must be in 0001..9999; got {match.group('year')}"
+        )
     if not 1 <= month <= 12:
         raise ValueError(f"versionTime month must be in 1..12; got {month}")
     if not 1 <= day <= _days_in_month(year, month):
@@ -145,6 +153,16 @@ def _parse_version_time(value: str) -> int:
             )
         delta = timedelta(hours=offset_hour, minutes=offset_minute)
         offset = timezone(-delta if match.group("sign") == "-" else delta)
+
+    if end_of_day and year == 9999 and month == 12 and day == 31:
+        # The end-of-day form of the last representable day names midnight of
+        # year 10000, which is outside the range above. Refusing it is the same
+        # rule applied to the instant the value denotes rather than to the
+        # digits it is written with.
+        raise ValueError(
+            "versionTime 9999-12-31T24:00:00 names midnight of year 10000, "
+            "outside the 0001..9999 range this resolver accepts"
+        )
 
     moment = datetime(
         year, month, day, 0 if end_of_day else hour, minute, second, tzinfo=offset
@@ -253,7 +271,11 @@ def resolve(
             target_id = _parse_version_id(version_id)
         if version_time is not None:
             target_time = _parse_version_time(version_time)
-    except ValueError as e:
+    except (ValueError, OverflowError) as e:
+        # OverflowError as well as ValueError: date arithmetic at the edge of
+        # the representable range raises it, and a version request must always
+        # come back as a resolution result, never as an exception through the
+        # caller's stack.
         return error_result("invalidDidUrl", str(e))
 
     versioned = target_id is not None or target_time is not None

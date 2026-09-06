@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from did_julia import resolve
+from did_julia import _parse_version_time, resolve
 from did_julia.chain import trace_history
 from did_julia.identifier import parse
 from did_julia.state import (
@@ -211,6 +211,8 @@ REFUSED_TIMES = [
     "2026-01-01T00:00:00+25:00",  # impossible offset
     "2026-01-01T00:00:00+00:60",  # impossible offset minutes
     "2026-01-01T00:00:00-99:99",
+    "0000-01-01T00:00:00Z",  # XML Schema's 1 BCE, outside 0001..9999
+    "9999-12-31T24:00:00Z",  # end of day here names midnight of year 10000
 ]
 
 
@@ -408,3 +410,44 @@ def test_the_post_rekey_state_is_derived_not_revealed(alias_client):
     assert (
         derived.authentication.merkle_root != revealed.authentication.merkle_root
     )
+
+
+# --- the instant a version time denotes ----------------------------------
+#
+# Kept identical to the table in the TypeScript suite. Resolution outcome alone
+# cannot police this: every year before the DID existed answers `notFound`
+# whether it was read as 0001 or as 1901, so the arithmetic has to be asserted
+# where it can be seen. `Date.UTC` applies a legacy 1900 offset to years 0..99,
+# which is exactly the kind of silent substitution that stays invisible through
+# the public API.
+
+VERSION_TIME_EPOCHS = [
+    ("0001-01-01T00:00:00Z", -62135596800),
+    ("0099-01-01T00:00:00Z", -59042995200),
+    ("1901-01-01T00:00:00Z", -2177452800),
+    ("1970-01-01T00:00:00Z", 0),
+    ("2026-09-02T11:34:09Z", 1788348849),
+    ("2026-08-01T24:00:00Z", 1785628800),
+    ("2026-08-02T00:00:00Z", 1785628800),
+    ("2026-01-01T00:00:00+14:00", 1767175200),
+    ("2026-01-01T00:00:00-14:00", 1767276000),
+    ("9999-12-31T23:59:59Z", 253402300799),
+]
+
+
+@pytest.mark.parametrize("version_time,epoch", VERSION_TIME_EPOCHS)
+def test_version_time_denotes_the_expected_instant(version_time, epoch):
+    assert _parse_version_time(version_time) == epoch
+
+
+def test_a_version_time_at_the_edge_of_the_range_cannot_escape_as_an_exception(
+    org_client,
+):
+    """Date arithmetic at the boundary raises OverflowError rather than
+    ValueError. A version request must always come back as a resolution
+    result — an exception through the caller's stack is not one."""
+    result = resolve(
+        ORG_DID, client=org_client, version_time="9999-12-31T24:00:00Z"
+    )
+    assert result["didDocument"] is None
+    assert result["didResolutionMetadata"]["error"] == "invalidDidUrl"
