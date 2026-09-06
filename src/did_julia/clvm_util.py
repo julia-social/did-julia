@@ -16,22 +16,36 @@ from __future__ import annotations
 from hashlib import sha256
 from typing import Iterator, Optional, Union
 
-from chia_rs import (
-    ALLOW_BACKREFS,
-    ENABLE_BLS_OPS_OUTSIDE_GUARD,
-    ENABLE_FIXED_DIV,
-    run_chia_program,
-)
+import chia_rs
+from chia_rs import run_chia_program
 
 Node = Union[bytes, tuple]  # atom | (left, right)
 
 NIL: Node = b""
 MAX_COST = 11_000_000_000  # Chia block cost limit
-# Post-hardfork mainnet consensus behavior: BLS operators outside the
-# softfork guard, hardfork division semantics, and backref-compressed
-# serialization. did:julia spends use BLS operators, so running with
-# these flags is required to replay them faithfully.
-RUN_FLAGS = ENABLE_BLS_OPS_OUTSIDE_GUARD | ENABLE_FIXED_DIV | ALLOW_BACKREFS
+
+# Post-hardfork mainnet consensus behavior: BLS operators outside the softfork
+# guard, hardfork division semantics, and backref-compressed serialization.
+# did:julia spends use BLS operators, so replaying them faithfully requires
+# that behavior — with flags of 0, a multisig spend fails with julia error 15.
+#
+# Each of the three was a hardfork-gated option when this resolver was written
+# and has since become unconditional consensus, so chia_rs stopped defining the
+# constants (they are absent from 0.48). Look each one up by name and OR in
+# whatever this build actually has: on a build that still gates the behavior
+# the flag is set, and on a build that has retired the gate the behavior is
+# already the default. The resolver's own verification is what makes this safe
+# to do dynamically — a spend replayed under the wrong semantics yields state
+# that does not recompute to the coin's puzzle hash, so it fails closed rather
+# than resolving to something plausible.
+CONSENSUS_FLAG_NAMES = (
+    "ENABLE_BLS_OPS_OUTSIDE_GUARD",
+    "ENABLE_FIXED_DIV",
+    "ALLOW_BACKREFS",
+)
+RUN_FLAGS = 0
+for _flag in CONSENSUS_FLAG_NAMES:
+    RUN_FLAGS |= getattr(chia_rs, _flag, 0)
 
 
 # ---------------------------------------------------------------- serialization

@@ -89,6 +89,18 @@ The two committed mainnet recordings additionally prove the identity path
 end to end: both canary DIDs resolve to documents byte-equivalent to the Python
 reference resolver's.
 
+**Updated 2026-09-02 — a real state change is now covered.** Until then every
+committed recording was a spend that left state untouched, so this design had
+been proved against the compiled puzzles but never against a mainnet
+transition. The personal alias canary was rekeyed at block 9235350: generation
+3 carries a different authentication root and a different singleton puzzle hash
+than the generation before it. Derivation identifies that spend as `rekey`
+through the child-puzzle-hash table (`source: "identified"`, not the exhaustive
+backstop) and reproduces generation 3's on-chain puzzle hash, and both
+resolvers produce byte-equivalent documents on either side of the change.
+`versions.test.ts` asserts the operation and the source, so a table that stops
+matching the chain fails loudly rather than degrading quietly into a search.
+
 ## Scope and limits
 
 - Solution shapes are **puzzle-version specific**. This closed transition set

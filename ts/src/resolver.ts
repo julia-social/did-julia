@@ -20,20 +20,26 @@ import type {
 } from "did-resolver";
 import {
   ChainError,
+  type CoinRecord,
   FullNodeClient,
   type FullNodeClientOptions,
   NotFoundError,
+  type SingletonHistory,
   coinId,
+  traceHistory,
   traceSingleton,
 } from "./chain.js";
+import { fromHex, toHex } from "./clvm.js";
 import { InvalidDidError, parseDid } from "./identifier.js";
 import {
+  type DerivedState,
   StateError,
   UnverifiableStateError,
   deriveVerifiedState,
   genesisPublicKey,
   isCurrentPuzzle,
   revealedKeysFromSpend,
+  revealedVerifiedState,
 } from "./state.js";
 import { buildDocument, errorResult, resolutionResult } from "./diddoc.js";
 
@@ -163,17 +169,228 @@ export interface JuliaResolverOptions extends FullNodeClientOptions {
 /** Per-request DID resolution options, plus a cancellation signal. */
 export interface JuliaResolutionRequest extends DIDResolutionOptions {
   signal?: AbortSignal;
+  /**
+   * The `versionTime` DID parameter (spec §7.2.1): an XML datetime carrying a
+   * UTC designator or an explicit offset. `versionId` is declared by the DIF
+   * `did-resolver` interface itself.
+   */
+  versionTime?: string;
+}
+
+/** A version option the caller wrote wrong — an invalid DID URL, not a miss. */
+class InvalidVersionError extends Error {}
+
+/**
+ * An XML Schema dateTime with a timezone, the form DID Resolution requires.
+ * Every field is captured because each one is range-checked
+ * below: `Date.parse` normalizes an impossible date into a real one rather than
+ * rejecting it, so it cannot be the judge of whether a date exists.
+ */
+const XML_DATETIME =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/;
+
+const MONTH_LENGTHS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2 && year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) {
+    return 29;
+  }
+  return MONTH_LENGTHS[month - 1];
+}
+
+/**
+ * A did:julia version ID is the coin ID of a singleton generation (§8.5): 32
+ * octets, hex, with or without a `0x` prefix.
+ */
+function parseVersionId(value: string): Uint8Array {
+  const text = value.trim().replace(/^0[xX]/, "");
+  if (text.length !== 64 || !/^[0-9a-fA-F]+$/.test(text)) {
+    throw new InvalidVersionError(
+      "a did:julia versionId is a 32-octet coin ID in hex (64 hex digits); " +
+        `got ${text.length}`,
+    );
+  }
+  return fromHex(text.toLowerCase());
+}
+
+/**
+ * XML datetime -> POSIX seconds.
+ *
+ * Every field is range-checked against the calendar, so a date that does not
+ * exist is rejected rather than rolled forward into one that does. `Date.parse`
+ * cannot do this: it normalizes, turning `2026-02-30T00:00:00Z` into March 2nd
+ * and `2026-02-29T00:00:00Z` into March 1st, and it accepts hour 24 as the next
+ * day. A resolver that answered those with the version current on the
+ * normalized date would be answering a different question than the caller
+ * asked, which is the one failure they cannot detect. The Python reference
+ * resolver rejects exactly this set, and the two must not disagree about which
+ * requests are valid.
+ *
+ * Sub-second precision is truncated — the DID Resolution specification requires
+ * datetimes without it, and a Chia block's timestamp has one-second resolution
+ * anyway.
+ */
+export function parseVersionTime(value: string): number {
+  const match = XML_DATETIME.exec(value.trim());
+  if (match === null) {
+    throw new InvalidVersionError(
+      "versionTime must be an XML datetime carrying a UTC designator or an " +
+        `explicit offset; got '${value}'`,
+    );
+  }
+  const [
+    ,
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    second,
+    fraction,
+    sign,
+    offsetHour,
+    offsetMinute,
+  ] = match.map((field) => (field === undefined ? field : field)) as string[];
+  const y = Number(year);
+  const mo = Number(month);
+  const d = Number(day);
+  // XML Schema admits year 0000 (1 BCE under astronomical numbering) and
+  // expanded years beyond four digits; this resolver accepts 0001..9999, the
+  // range both implementations can represent exactly, and refuses the rest
+  // rather than mapping it somewhere it does not belong.
+  if (y < 1) {
+    throw new InvalidVersionError(
+      `versionTime year must be in 0001..9999; got ${year}`,
+    );
+  }
+  if (mo < 1 || mo > 12) {
+    throw new InvalidVersionError(
+      `versionTime month must be in 1..12; got ${mo}`,
+    );
+  }
+  if (d < 1 || d > daysInMonth(y, mo)) {
+    throw new InvalidVersionError(
+      `versionTime day ${d} does not exist in month ${mo} of ${y}`,
+    );
+  }
+  const h = Number(hour);
+  const mi = Number(minute);
+  const sec = Number(second);
+  // `24:00:00` is XML Schema's end-of-day form and denotes the following day's
+  // midnight (xmlschema11-2 §3.3.8, endOfDayFrag). It is a defined lexical
+  // mapping onto one unambiguous instant, not a value being coerced into a
+  // different one, so honouring it answers exactly the question asked.
+  const endOfDay = h === 24;
+  if (endOfDay) {
+    if (
+      mi !== 0 ||
+      sec !== 0 ||
+      (fraction !== undefined && /[^0]/.test(fraction))
+    ) {
+      throw new InvalidVersionError(
+        "versionTime hour 24 is only the end-of-day form 24:00:00",
+      );
+    }
+  } else if (h > 23 || mi > 59 || sec > 59) {
+    throw new InvalidVersionError(
+      `versionTime ${hour}:${minute}:${second} is not a time of day`,
+    );
+  }
+
+  let offsetSeconds = 0;
+  if (sign !== undefined) {
+    const oh = Number(offsetHour);
+    const om = Number(offsetMinute);
+    // XML Schema admits offsets of ±00:00 through ±13:59, plus exactly ±14:00 —
+    // the range real timezones occupy. Anything wider is not an XML datetime,
+    // whatever instant it might seem to denote.
+    if (!((oh <= 13 && om <= 59) || (oh === 14 && om === 0))) {
+      throw new InvalidVersionError(
+        "versionTime carries a UTC offset outside XML Schema's ±14:00 range: " +
+          `${sign}${offsetHour}:${offsetMinute}`,
+      );
+    }
+    offsetSeconds = (oh * 3600 + om * 60) * (sign === "-" ? -1 : 1);
+  }
+
+  if (endOfDay && y === 9999 && mo === 12 && d === 31) {
+    // The end-of-day form of the last representable day names midnight of year
+    // 10000, which is outside the range above. Refusing it is the same rule
+    // applied to the instant the value denotes rather than to the digits it is
+    // written with.
+    throw new InvalidVersionError(
+      "versionTime 9999-12-31T24:00:00 names midnight of year 10000, outside " +
+        "the 0001..9999 range this resolver accepts",
+    );
+  }
+
+  // NOT `Date.UTC(y, ...)`: it applies a legacy 1900 offset to years 0 through
+  // 99, so `0001-01-01` would silently become 1901 — a different instant than
+  // the caller named, answered as though it were theirs. `setUTCFullYear` has
+  // no such rule.
+  const moment = new Date(0);
+  moment.setUTCFullYear(y, mo - 1, d);
+  moment.setUTCHours(endOfDay ? 0 : h, mi, sec, 0);
+  return (
+    Math.floor(moment.getTime() / 1000) + (endOfDay ? 86400 : 0) - offsetSeconds
+  );
+}
+
+/** `YYYY-MM-DDTHH:MM:SSZ` for an error message about a block's timestamp. */
+function utcSeconds(unixSeconds: number): string {
+  return new Date(unixSeconds * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** Index of the generation a version request names (spec §7.2.1). */
+function selectGeneration(
+  history: SingletonHistory,
+  did: string,
+  versionId: Uint8Array | null,
+  versionTime: number | null,
+): number {
+  const generations = history.generations;
+  if (versionId !== null) {
+    const wanted = toHex(versionId);
+    const index = generations.findIndex(
+      (record) => toHex(coinId(record.coin)) === wanted,
+    );
+    if (index < 0) {
+      throw new NotFoundError(
+        `no generation of ${did} has version ID 0x${wanted}`,
+      );
+    }
+    return index;
+  }
+
+  // The latest generation confirmed at or before the requested time. Several
+  // generations can share a timestamp (a singleton may be spent more than once
+  // in one block); the last of them is the state that block left behind.
+  let selected = -1;
+  generations.forEach((record, index) => {
+    if (record.timestamp && record.timestamp <= (versionTime as number)) {
+      selected = index;
+    }
+  });
+  if (selected < 0) {
+    throw new NotFoundError(
+      `${did} had no version at the requested time; its first version was ` +
+        `confirmed at ${utcSeconds(generations[0].timestamp)}`,
+    );
+  }
+  return selected;
 }
 
 /**
  * Resolve a did:julia DID to a DID resolution result (spec §7.2, §8).
  *
- * Version-specific resolution (`versionId` / `versionTime`) is NOT implemented
- * — this resolver always reads the singleton's current state. Rather than
- * ignoring those options and returning the latest document as though it were
- * the requested one, a request carrying either is REFUSED with
- * `unsupportedResolutionOption`. Silently answering the wrong question is the
- * one failure mode a caller cannot detect.
+ * With no version option this reads the singleton's current state. With
+ * `versionId` or `versionTime` — mutually exclusive, as DID Resolution
+ * requires — it walks the DID's lineage and answers for the generation that
+ * version names (spec §7.2.1). A superseded generation's state is read from
+ * its own spend and checked against that coin's own puzzle hash, so history
+ * is served under exactly the commitment current state is served under: a
+ * version this resolver cannot verify is an error, never a guess, and the
+ * current document is never returned in place of a requested one.
  *
  * The only representation produced is `application/did+ld+json`, which every
  * result reports in `didResolutionMetadata.contentType`.
@@ -190,15 +407,12 @@ export async function resolve(
       `did:julia resolution produces ${CONTENT_TYPE} only; '${accept}' is not available`,
     );
   }
-  for (const option of ["versionId", "versionTime"] as const) {
-    if (resolutionOptions[option] !== undefined) {
-      return errorResult(
-        "unsupportedResolutionOption",
-        `did:julia resolution does not implement '${option}'; this resolver ` +
-          "reads current singleton state only, and will not return the latest " +
-          "document in place of a requested version",
-      );
-    }
+  const { versionId, versionTime } = resolutionOptions;
+  if (versionId !== undefined && versionTime !== undefined) {
+    return errorResult(
+      "unsupportedResolutionOption",
+      "versionId and versionTime are mutually exclusive; supply at most one",
+    );
   }
   const signal = resolutionOptions.signal;
   let launcherId: Uint8Array;
@@ -211,26 +425,77 @@ export async function resolve(
     throw cause;
   }
 
+  let targetId: Uint8Array | null = null;
+  let targetTime: number | null = null;
+  try {
+    if (versionId !== undefined) targetId = parseVersionId(versionId);
+    if (versionTime !== undefined) targetTime = parseVersionTime(versionTime);
+  } catch (cause) {
+    if (cause instanceof InvalidVersionError) {
+      return errorResult("invalidDidUrl", cause.message);
+    }
+    throw cause;
+  }
+  const versioned = targetId !== null || targetTime !== null;
+
   const client = options.client ?? new FullNodeClient(options);
 
   try {
-    const lineage = await traceSingleton(client, launcherId, signal);
-    const parentSpend = await client.getPuzzleAndSolution(
-      coinId(lineage.parent.coin),
-      lineage.parent.spentBlockIndex,
-      signal,
-    );
-    const derived = deriveVerifiedState(
-      parentSpend,
-      lineage.parent.coin.puzzleHash,
-      lineage.current.coin.puzzleHash,
-      launcherId,
-    );
+    let prelauncherOf: { prelauncher: CoinRecord };
+    let record: CoinRecord;
+    let parent: CoinRecord;
+    let following: CoinRecord | null = null;
+    let created: number | undefined;
 
-    const candidates = revealedKeysFromSpend(parentSpend, derived.state);
+    if (versioned) {
+      const history = await traceHistory(client, launcherId, signal);
+      const index = selectGeneration(history, did, targetId, targetTime);
+      record = history.generations[index];
+      parent = index > 0 ? history.generations[index - 1] : history.launcher;
+      following = history.generations[index + 1] ?? null;
+      created = history.generations[0].timestamp;
+      prelauncherOf = history;
+    } else {
+      const lineage = await traceSingleton(client, launcherId, signal);
+      record = lineage.current;
+      parent = lineage.parent;
+      prelauncherOf = lineage;
+    }
+
+    // A superseded generation reveals its own state in its own spend; the
+    // unspent one has no spend of its own, so its state is derived from the
+    // parent's. Either way the answer must reproduce `record`'s puzzle hash.
+    let spend;
+    let derived: DerivedState;
+    if (record.spent) {
+      spend = await client.getPuzzleAndSolution(
+        coinId(record.coin),
+        record.spentBlockIndex,
+        signal,
+      );
+      derived = revealedVerifiedState(
+        spend,
+        record.coin.puzzleHash,
+        launcherId,
+      );
+    } else {
+      spend = await client.getPuzzleAndSolution(
+        coinId(parent.coin),
+        parent.spentBlockIndex,
+        signal,
+      );
+      derived = deriveVerifiedState(
+        spend,
+        parent.coin.puzzleHash,
+        record.coin.puzzleHash,
+        launcherId,
+      );
+    }
+
+    const candidates = revealedKeysFromSpend(spend, derived.state);
     const genesisKey = await genesisPublicKey(
       client,
-      lineage,
+      prelauncherOf,
       derived.genesisKeyHash,
       signal,
     );
@@ -239,14 +504,21 @@ export async function resolve(
     return resolutionResult({
       state: derived.state,
       document: buildDocument(derived.state, candidates),
-      versionCoinId: coinId(lineage.current.coin),
-      confirmedTimestamp: lineage.current.timestamp,
-      // True by construction: `deriveVerifiedState` only returns a state whose
-      // recomputed singleton puzzle hash equals the unspent coin's, and throws
-      // otherwise. The field is kept for parity with the reference resolver
-      // and because its absence would be a silent claim.
+      versionCoinId: coinId(record.coin),
+      confirmedTimestamp: record.timestamp,
+      // True by construction: both routes return only a state whose recomputed
+      // singleton puzzle hash equals the coin's, and throw otherwise. The field
+      // is kept for parity with the reference resolver and because its absence
+      // would be a silent claim.
       verified: true,
       currentPuzzle: isCurrentPuzzle(derived.state),
+      ...(created !== undefined ? { createdTimestamp: created } : {}),
+      ...(following !== null
+        ? {
+            nextVersionCoinId: coinId(following.coin),
+            nextTimestamp: following.timestamp,
+          }
+        : {}),
     });
   } catch (cause) {
     if (cause instanceof NotFoundError) {

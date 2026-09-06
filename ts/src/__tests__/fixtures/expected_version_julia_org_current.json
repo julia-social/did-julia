@@ -5,14 +5,18 @@
    "https://w3id.org/security/multikey/v1",
    "https://not.bot/ns/did-julia/v1"
   ],
-  "id": "did:julia:ArD2JyqfkVVbT9Liegqu4jcfBEXtHnPofmF2rsBuq1TX",
+  "id": "did:julia:BqJasSrzc9aGJmU4U3A2z4XrqozAAMiMhnqHaq4F2cDc",
   "juliaAuthentication": {
-   "merkleRoot": "0x76e9c885bf0fa6b637ac3da01c652081ff4d8ab7521ccb8542fd14c2fd5a786c",
+   "merkleRoot": "0x45cdff1c7c30d1cd32d49cf22e20c7c6ec74882ca1880d4c6b7d0e406e40eda1",
    "classDepth": 1,
-   "requiredClasses": 1,
+   "requiredClasses": 2,
    "classes": [
     {
-     "classId": "0xcce929457b710a08b1e060a2968561ac958388945836589baa7f837903f1df39",
+     "classId": "0xd4eab10e9ab1801b3ccba8d2f9e0966876030d8aec0b87d7fa779949192b7595",
+     "requiredMembers": 2
+    },
+    {
+     "classId": "0xae4e6d48ab7f96e68cf3cc2122bddf61fc59e1fb52b2cf26e889aa0acdf40d53",
      "requiredMembers": 1
     }
    ]
@@ -21,13 +25,14 @@
   "juliaRecovery": {
    "configured": true,
    "recoveryAgents": true,
-   "delayBlocks": 4320,
+   "delayBlocks": 1440,
    "prerotation": "disabled"
   }
  },
  "didDocumentMetadata": {
-  "versionId": "0x6db248a37284af64ddc068ee80968363c96d1929ba006e3dc514312e34d2ac33",
-  "updated": "2026-09-02T11:34:09Z"
+  "versionId": "0xf295281cc99108b6c64fc71952cf2419da8df2830b1bd6842b44bc41a94ab75c",
+  "created": "2026-07-30T15:23:35Z",
+  "updated": "2026-08-01T15:21:50Z"
  },
  "didResolutionMetadata": {
   "contentType": "application/did+ld+json",

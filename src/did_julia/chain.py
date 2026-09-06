@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Optional
+from typing import List, Optional
 
 import requests
 
@@ -150,8 +150,41 @@ class SingletonLineage:
     generations: int             # number of singleton generations traversed
 
 
-def trace_singleton(client: FullNodeClient, launcher_id: bytes) -> SingletonLineage:
-    """Walk from launcher ID to the current unspent singleton coin (spec §7.2)."""
+@dataclass(frozen=True)
+class SingletonHistory:
+    """Every generation of a singleton, oldest first (spec §7.2.1).
+
+    ``generations[0]`` is the coin the launcher spend created — the DID's
+    first version — and ``generations[-1]`` is the unspent current coin.
+    Version-specific resolution needs the whole list; current-state
+    resolution needs only its tail, which :func:`trace_singleton` returns.
+    """
+    prelauncher: CoinRecord
+    launcher: CoinRecord
+    generations: List[CoinRecord]
+
+    def lineage(self) -> SingletonLineage:
+        current = self.generations[-1]
+        parent = (
+            self.generations[-2] if len(self.generations) > 1 else self.launcher
+        )
+        return SingletonLineage(
+            prelauncher=self.prelauncher,
+            launcher=self.launcher,
+            current=current,
+            parent=parent,
+            generations=len(self.generations),
+        )
+
+
+def trace_history(client: FullNodeClient, launcher_id: bytes) -> SingletonHistory:
+    """Walk the singleton from its launcher, recording every generation.
+
+    The walk itself is the one in spec §7.2 — follow the odd-amount child of
+    each spend, which the singleton consensus rules make unique — kept in a
+    single implementation so version-specific and current-state resolution
+    can never disagree about a DID's lineage.
+    """
     launcher = client.get_coin_record_by_name(launcher_id)
     if launcher is None:
         raise NotFoundError("launcher coin not found on chain")
@@ -165,8 +198,7 @@ def trace_singleton(client: FullNodeClient, launcher_id: bytes) -> SingletonLine
         raise NotFoundError("prelauncher coin not found")
 
     record = launcher
-    parent = launcher
-    generations = 0
+    generations: List[CoinRecord] = []
     while record.spent:
         children = client.get_coin_records_by_parent_ids([record.coin.coin_id()])
         nxt = [c for c in children if c.coin.amount % 2 == 1]
@@ -174,13 +206,13 @@ def trace_singleton(client: FullNodeClient, launcher_id: bytes) -> SingletonLine
             raise ChainError(
                 f"expected exactly one odd-amount singleton child, found {len(nxt)}"
             )
-        parent = record
         record = nxt[0]
-        generations += 1
-    return SingletonLineage(
-        prelauncher=prelauncher,
-        launcher=launcher,
-        current=record,
-        parent=parent,
-        generations=generations,
+        generations.append(record)
+    return SingletonHistory(
+        prelauncher=prelauncher, launcher=launcher, generations=generations
     )
+
+
+def trace_singleton(client: FullNodeClient, launcher_id: bytes) -> SingletonLineage:
+    """Walk from launcher ID to the current unspent singleton coin (spec §7.2)."""
+    return trace_history(client, launcher_id).lineage()
